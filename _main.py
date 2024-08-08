@@ -1,21 +1,217 @@
 from fastapi import FastAPI, HTTPException, Query,Body, Request
+from pydantic import BaseModel
+from bs4 import BeautifulSoup
+import requests
 import json
 import urllib3
+from typing import Optional, List
+from sqlalchemy import create_engine, Column, String, Boolean, Float, Integer, MetaData, func
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from databases import Database
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.sql import select
 from contextlib import asynccontextmanager
+import re
+from fake_useragent import UserAgent
 from sqlalchemy import cast, Float
+from pydantic import BaseModel, Field, HttpUrl, field_validator
+from typing import Optional
 from pydantic import ValidationError
-from requests_body import *
-from sqlite import *
-from spider import *
+from enum import Enum
+ua = UserAgent()
 # 忽略 HTTPS 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+DATABASE_URL = "sqlite:///./test.db"  # 使用 SQLite 数据库；你可以替换为其他数据库
+database = Database(DATABASE_URL)
+metadata = MetaData()
+
+from sqlalchemy import Table
+
+goods = Table(
+    "goods",
+    metadata,
+    Column("id", Integer, primary_key=True, index=True),
+    Column("name", String, index=True),
+    Column("price", String),
+    Column("url", String, unique=True, index=True),
+    Column("discount", String, nullable=True),
+    Column("comment", String, nullable=True),
+    Column("is_prime", Boolean, default=False),
+    Column("goods_stars", Float, nullable=True),
+    Column("goods_image", String, nullable=True),
+)
+
+# 创建数据库引擎
+engine = create_engine(DATABASE_URL)
+metadata.create_all(engine)
+
+# 定义 AmazonFilter 类
+class AmazonFilter():
+    def __init__(self, name: str, country: str, type: str, page_start: int, min_stars: int, max_stars: int, min_likes: int, max_likes: int, key: str):
+        self.name = name
+        self.country = country
+        self.type = type
+        self.page_start = page_start
+        self.min_stars = min_stars
+        self.max_stars = max_stars
+        self.min_likes = min_likes
+        self.max_likes = max_likes
+        self.key = key
+    
+    def find_key(self: str) -> str:
+        base_url = f"https://www.amazon.{self.country}/s"
+        query_params = {
+            'k': self.key,
+            'page': self.page_start,
+            'rh': f'p_72:{self.min_stars}-{self.max_stars},p_85:{self.min_likes}-{self.max_likes}'
+        }
+        query_string = '&'.join([f"{k}={v}" for k, v in query_params.items()])
+        print(f"{base_url}?{query_string}")
+        return f"{base_url}?{query_string}"
+    
+    def find_asin(self, asin: str) -> str:
+        return f"https://www.amazon.{self.country}/dp/{asin}"
+    
+    def find_custom_url(self, url: str) -> str:
+        return url
+
+# 定义请求体模型
+
+class URLRequest(BaseModel):
+    url: HttpUrl = Field(..., description="The URL to request")
+    start_page: Optional[int] = Field(1, ge=1, description="The starting page number")
+    end_page: Optional[int] = Field(1, ge=1, description="The ending page number")
+
+    @field_validator('end_page')
+    def end_page_must_be_greater_or_equal_to_start_page(cls, v, info):
+        if 'start_page' in info.data and v < info.data['start_page']:
+            raise ValueError('end_page must be greater than or equal to start_page')
+        return v
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "url": "https://www.amazon.com/s?k=laptop&crid=E4IFH65CN7W3&sprefix=laptop%2Caps%2C316&ref=nb_sb_noss_1",
+                "start_page": 1,
+                "end_page": 5
+            }
+        }
+class deleteData(BaseModel):
+    id: int = Field(...,ge=1,description="the main sql key")
+
+class FilterRequest(BaseModel):
+    name: Optional[str] = Field(default='', max_length=20,description="Filter name")
+    country: Optional[str] = Field(default='.com', max_length=20,description="Country code")
+    type: Optional[str] = Field(default="serach", max_length=20,description="Filter type")
+    page_start: Optional[int] = Field(default=1, ge=1,description="Starting page number")
+    min_stars: Optional[int] = Field(default=0, ge=0,description="Minimum stars")
+    max_stars: Optional[int] = Field(default=30000, ge=1,description="Maximum stars")
+    min_likes: Optional[int] = Field(default=0, ge=0,description="Minimum likes")
+    max_likes: Optional[int] = Field(default=1000, ge=1,description="Maximum likes")
+    key: Optional[str] = Field(default='', max_length=20,description="Search key")
+
+# 获取 HTML 内容
+def get_html_content(url, page=1):
+    headers = {
+        'User-Agent': ua.random,
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive'
+    }
+    
+    # 添加页码参数到 URL
+    if '?' in url:
+        url += f'&page={page}'
+    else:
+        url += f'?page={page}'
+    
+    main_page = requests.get(url=url, headers=headers, verify=False)
+    if main_page.status_code != 200:
+        HTTPException(status_code=main_page.status_code, detail="Failed to fetch the URL")
+    return main_page.text
+
+# 提取包含 data-asin 的 <div> 元素
+def get_table(html: str):
+    soup = BeautifulSoup(html, 'html.parser')
+    goods_info_list = soup.find_all('div', attrs={'data-asin': True})
+    return goods_info_list
+
+# 提取商品信息
+def get_goods_info(goods_info):
+    pattern = re.compile(r'^\d{1,3}(,\d{3})* ratings')
+    try:
+        goods_discount = goods_info.find('span', class_='a-size-base s-highlighted-text-padding aok-inline-block s-coupon-highlight-color')
+        goods_discount = goods_discount.text if goods_discount else None
+    except AttributeError:
+        goods_discount = None
+    
+    try:
+        goods_is_prime = bool(goods_info.find('span', class_='a-icon a-icon-prime a-icon-medium'))
+    except AttributeError:
+        goods_is_prime = False
+    
+    try:
+        goods_name = goods_info.find('div',attrs={'data-cy':"title-recipe"})
+        goods_name = goods_name.text if goods_name else None
+    except AttributeError:
+        goods_name = None
+    
+    if goods_name is None:
+        return None
+    
+    try:
+        goods_comment = goods_info.find_all('span', attrs={'aria-label':pattern})
+        goods_comment = goods_comment[0].get('aria-label') if goods_comment else None
+    except AttributeError:
+        goods_comment = None
+    
+    try:
+        goods_price = goods_info.find('span', class_='a-price').find('span', class_='a-offscreen').text
+    except AttributeError:
+        goods_price = None
+    
+    try:
+        asin = goods_info.get('data-asin')
+        goods_url = f'https://www.amazon.com/dp/{asin}' if asin else None
+    except AttributeError:
+        goods_url = None
+    
+    try:
+        goods_stars = goods_info.find('span', class_='a-icon-alt')
+        goods_stars = float(goods_stars.text[:3]) if goods_stars else None
+    except (AttributeError, ValueError):
+        goods_stars = None
+    
+    try:
+        goods_image = goods_info.find('img', class_='s-image')
+        goods_image = goods_image['src'] if goods_image else None
+    except AttributeError:
+        goods_image = None
+    
+    return {
+        'name': goods_name,
+        'price': goods_price,
+        'url': goods_url,
+        'discount': goods_discount,
+        'comment': goods_comment,
+        'is_prime': goods_is_prime,
+        'goods_stars': goods_stars,
+        'goods_image': goods_image
+    }
+
 # 创建 FastAPI 应用
 app = FastAPI()
+
 # 配置 CORS
 origins = [
+    # "http://localhost.tiangolo.com",
+    # "https://localhost.tiangolo.com",
+    # "http://localhost",
+    # "http://localhost:8000",
+
     "*"
 ]
 
@@ -175,6 +371,18 @@ async def delete_goods(request: deleteData = Body(
     # 捕获所有类型的异常，并返回状态码为 400 的 HTTP 异常
         raise HTTPException(status_code=400, detail="请求无法处理，请检查输入")
 
+class SortField(str, Enum):
+    price = "price"
+    likes = "likes"
+    stars = "stars"
+    # 添加其他可能的排序字段
+
+class SortRequest(BaseModel):
+    sort_by: SortField = SortField.price
+    page: int = 1
+    per_page: int = 8
+    ascending: bool = True
+
 @app.post("/sortGoods")
 async def sort_goods(
     request: SortRequest = Body(
@@ -222,4 +430,5 @@ async def lifespan(app: FastAPI):
 app.router.lifespan_context = lifespan
 
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
