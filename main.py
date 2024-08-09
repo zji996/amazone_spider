@@ -7,9 +7,6 @@ from sqlalchemy.sql import select
 from contextlib import asynccontextmanager
 from sqlalchemy import cast, Float
 from pydantic import ValidationError
-import time
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import sessionmaker
 from requests_body import *
 from sqlite import *
 from spider import *
@@ -233,28 +230,25 @@ def encrypt_password(data: str) -> str:
 
 @app.post("/getToken")
 def get_token(request: getToken = Body(...)):
-    with Session as session:
+    with engine.connect() as connection:
         # 从数据库查询用户
         stmt = select(users).where(users.c.username == request.username)
-        result = session.execute(stmt)
-        user = result.scalar()
-        
+        result = connection.execute(stmt)
+        user = result.fetchone()
         if user:
             if user.password == encrypt_password(request.password):
-                if user.secret == request.secret:
-                    token = encrypt_password(request.username + request.password)
-                    # 将 token 存储到数据库中
-                    session.execute(
-                        users.update().where(users.c.username == request.username).values(token=token)
-                    )
-                    session.commit()
-                    return {"token": token}
-                else:
-                    raise HTTPException(status_code=400, detail="Incorrect secret")
+                token = encrypt_password(request.password)
+                # 将 token 存储到数据库中
+                connection.execute(
+                    users.update().where(users.c.username == request.username).values(token=token)
+                )
+                connection.commit()  # 确保提交事务
+                return {"token": token}
             else:
                 raise HTTPException(status_code=400, detail="Incorrect password")
         else:
             raise HTTPException(status_code=400, detail="Username not found")
+
 @app.post("/register")
 def register_user(request: RegisterRequest = Body(...)):
     with engine.connect() as connection:
@@ -277,8 +271,6 @@ def register_user(request: RegisterRequest = Body(...)):
         )
         connection.execute(new_user)
         connection.commit()  # 确保提交事务
-        
-        return {"message": "User registered successfully"}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.connect()

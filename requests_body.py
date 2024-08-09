@@ -58,12 +58,9 @@ class SortRequest(BaseModel):
     per_page: int = 8
     ascending: bool = True
 
-# class RegisterRequest(BaseModel):
-#     username: str = Field(..., max_length=20,description="username")
-#     password: str = Field(..., max_length=20,description="password")
-#     secret: Optional[str] = Field(..., max_length=20,description="secret")
-#     timestamp: Optional[int] = Field(..., max_length=20,description="timestamp")
-#     lifespan: Optional[int] = Field(..., ge=0,description="lifespan")
 class RegisterRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(..., max_length=20,description="username")
+    password: str = Field(..., max_length=20,description="password")
+    secret: Optional[str] = Field(None, max_length=20,description="secret")
+    timestamp: Optional[int] = Field(None, max_length=20,description="timestamp")
+    lifespan: Optional[int] = Field(None, ge=0,description="lifespan")

@@ -5,7 +5,7 @@ import time
 from sqlalchemy import Table
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-DATABASE_URL = "sqlite:///./test1.db"  # 使用 SQLite 数据库；你可以替换为其他数据库
+DATABASE_URL = "sqlite:///./test.db"  # 使用 SQLite 数据库；你可以替换为其他数据库
 database = Database(DATABASE_URL)
 metadata = MetaData()
 
@@ -36,8 +36,3 @@ users = Table(
 engine = create_engine(DATABASE_URL)
 # 创建所有表（如果尚未存在）
 metadata.create_all(engine)
-
-Session = sessionmaker(bind=engine)
-
-# 基类
-Base = declarative_base()
