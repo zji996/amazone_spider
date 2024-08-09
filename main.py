@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query,Body, Request
+from fastapi import FastAPI, HTTPException, Query,Body, Request,status
 import json
 import urllib3
 import uvicorn
@@ -7,9 +7,13 @@ from sqlalchemy.sql import select
 from contextlib import asynccontextmanager
 from sqlalchemy import cast, Float
 from pydantic import ValidationError
+import time
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import sessionmaker
 from requests_body import *
 from sqlite import *
 from spider import *
+import hashlib
 # 忽略 HTTPS 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # 创建 FastAPI 应用
@@ -213,6 +217,68 @@ async def sort_goods(
         print(f"Unexpected error: {str(e)}")  # 记录错误以便调试
         raise HTTPException(status_code=400, detail="请求无法处理，请检查输入")
 
+# def encrypt_password(username: str, password: str) -> str:
+#     current_time = str(int(time.time()))
+#     data = f"{username}{password}{current_time}"
+#     sha256 = hashlib.sha256()
+#     sha256.update(data.encode('utf-8'))
+#     return sha256.hexdigest()
+
+def encrypt_password(data: str) -> str:
+    sha256 = hashlib.sha256()
+    sha256.update(data.encode('utf-8'))
+    return sha256.hexdigest() 
+
+
+
+@app.post("/getToken")
+def get_token(request: getToken = Body(...)):
+    with Session as session:
+        # 从数据库查询用户
+        stmt = select(users).where(users.c.username == request.username)
+        result = session.execute(stmt)
+        user = result.scalar()
+        
+        if user:
+            if user.password == encrypt_password(request.password):
+                if user.secret == request.secret:
+                    token = encrypt_password(request.username + request.password)
+                    # 将 token 存储到数据库中
+                    session.execute(
+                        users.update().where(users.c.username == request.username).values(token=token)
+                    )
+                    session.commit()
+                    return {"token": token}
+                else:
+                    raise HTTPException(status_code=400, detail="Incorrect secret")
+            else:
+                raise HTTPException(status_code=400, detail="Incorrect password")
+        else:
+            raise HTTPException(status_code=400, detail="Username not found")
+@app.post("/register")
+def register_user(request: RegisterRequest = Body(...)):
+    with engine.connect() as connection:
+        # 检查用户名是否已存在
+        stmt = select(users).where(users.c.username == request.username)
+        result = connection.execute(stmt)
+        user = result.fetchone()
+        
+        if user:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username already exists")
+        
+        # 加密密码
+        encrypted_password = encrypt_password(request.password)
+        
+        # 创建新用户
+        new_user = users.insert().values(
+            username=request.username,
+            password=encrypted_password,
+            token=encrypted_password  # 示例 token，实际应用中需要生成
+        )
+        connection.execute(new_user)
+        connection.commit()  # 确保提交事务
+        
+        return {"message": "User registered successfully"}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.connect()

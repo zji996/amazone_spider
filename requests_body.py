@@ -31,7 +31,7 @@ class deleteData(BaseModel):
 
 class FilterRequest(BaseModel):
     name: Optional[str] = Field(default='', max_length=20,description="Filter name")
-    country: Optional[str] = Field(default='.com', max_length=20,description="Country code")
+    country: Optional[str] = Field(default='com', max_length=20,description="Country code")
     type: Optional[str] = Field(default="serach", max_length=20,description="Filter type")
     page_start: Optional[int] = Field(default=1, ge=1,description="Starting page number")
     min_stars: Optional[int] = Field(default=0, ge=0,description="Minimum stars")
@@ -40,6 +40,12 @@ class FilterRequest(BaseModel):
     max_likes: Optional[int] = Field(default=1000, ge=1,description="Maximum likes")
     key: Optional[str] = Field(default='', max_length=20,description="Search key")
 
+class getToken(BaseModel):
+    username: Optional[str] = Field(default='', max_length=20,description="username")
+    password: Optional[str] = Field(default='', max_length=20,description="password")
+    secret: Optional[str] = Field(default='', max_length=20,description="secret")
+    timestamp: Optional[int] = Field(default=0, max_length=20,description="timestamp")
+    lifespan: Optional[int] = Field(default=0, ge=0,description="lifespan")
 class SortField(str, Enum):
     price = "price"
     likes = "likes"
@@ -51,3 +57,13 @@ class SortRequest(BaseModel):
     page: int = 1
     per_page: int = 8
     ascending: bool = True
+
+# class RegisterRequest(BaseModel):
+#     username: str = Field(..., max_length=20,description="username")
+#     password: str = Field(..., max_length=20,description="password")
+#     secret: Optional[str] = Field(..., max_length=20,description="secret")
+#     timestamp: Optional[int] = Field(..., max_length=20,description="timestamp")
+#     lifespan: Optional[int] = Field(..., ge=0,description="lifespan")
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
