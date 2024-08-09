@@ -80,37 +80,42 @@ async def get_table_endpoint(
         example={
             "url": "https://www.amazon.com/s?k=laptop&crid=E4IFH65CN7W3&sprefix=laptop%2Caps%2C316&ref=nb_sb_noss_1",
             "start_page": 1,
-            "end_page": 5
+            "end_page": 5,
+            "token": "123"
         }
     )
 ):
     try:
-        goods_info_list = []
-        # 将 HttpUrl 对象转换为字符串
-        url = str(request.url)
-        for page in range(request.start_page, request.end_page + 1):
-            try:
-                html = get_html_content(url, page)
-                table = get_table(html)
-                if not table:
-                    continue
-                
-                # 提取每个商品的信息，并跳过名称为 None 的商品
-                for goods_info in table:
-                    goods_data = get_goods_info(goods_info)
-                    if goods_data and goods_data['name']:
-                        goods_info_list.append(goods_data)
-            except Exception as e:
-                # 记录错误但继续处理下一页
-                print(f"Error processing page {page}: {str(e)}")
-                continue
-                    
-        if goods_info_list:
-            await insert_goods_info(goods_info_list)
-            return {"goods": goods_info_list}
-        else:
-            raise HTTPException(status_code=404, detail="未找到商品信息")
-
+        async with async_session() as session:
+            async with session.begin():
+                user = await verify_user_by_token(session, request.token)
+            
+                if user:
+                    goods_info_list = []
+                    # 将 HttpUrl 对象转换为字符串
+                    url = str(request.url)
+                    for page in range(request.start_page, request.end_page + 1):
+                        try:
+                            html = get_html_content(url, page)
+                            table = get_table(html)
+                            if not table:
+                                continue
+                            
+                            # 提取每个商品的信息，并跳过名称为 None 的商品
+                            for goods_info in table:
+                                goods_data = get_goods_info(goods_info)
+                                if goods_data and goods_data['name']:
+                                    goods_info_list.append(goods_data)
+                        except Exception as e:
+                            # 记录错误但继续处理下一页
+                            print(f"Error processing page {page}: {str(e)}")
+                            continue
+                                
+                    if goods_info_list:
+                        await insert_goods_info(goods_info_list)
+                        return {"goods": goods_info_list}
+                    else:
+                        raise HTTPException(status_code=404, detail="未找到商品信息")
     except ValidationError as e:
         # 处理请求体验证错误
         error_messages = []
@@ -152,28 +157,41 @@ async def log_request(request: Request, call_next):
     response = await call_next(request)
     return response
 
-@app.get("/clearGoods")
-async def clear_goods():
-    query = goods.delete()  # 构建删除所有记录的 SQL 查询
-    await database.execute(query)  # 执行 SQL 查询
-    return {"status": "All goods cleared"}
+@app.post("/clearGoods")
+async def clear_goods(request: ClearRequest = Body(...)):
+    async with async_session() as session:
+        async with session.begin():
+            user = await verify_user_by_token(session, request.token)
+            
+            if user:
+                # 如果用户验证通过，执行删除操作
+                await session.execute(goods.delete())
+                return {"status": "All goods cleared"}
+            else:
+                raise HTTPException(status_code=404, detail="User not found or token mismatch")
 
 
 @app.post("/deleteGoods/")
 async def delete_goods(request: deleteData = Body(
         ...,
         example={
-            "id": 1
+            "id": 1,
+            "token": "123"
         }
     )):
     try:
-        query = goods.delete().where(goods.c.id == request.id)  # 构建通过 id 删除条目的 SQL 查询
-        result = await database.execute(query)  # 执行 SQL 查询
-        if result:
-            return {"status": f"Goods with id {request.id} deleted"}
-        # HTTPException(status_code=404, detail=f"Goods with id {item_id} not found")
+        async with async_session() as session:
+            async with session.begin():
+                user = await verify_user_by_token(session, request.token)
+                
+                if user:
+                    query = goods.delete().where(goods.c.id == request.id)  # 构建通过 id 删除条目的 SQL 查询
+                    result = await database.execute(query)  # 执行 SQL 查询
+                    if result:
+                        return {"status": f"Goods with id {request.id} deleted"}
+                    # HTTPException(status_code=404, detail=f"Goods with id {item_id} not found")
     except Exception as e:
-    # 捕获所有类型的异常，并返回状态码为 400 的 HTTP 异常
+                # 捕获所有类型的异常，并返回状态码为 400 的 HTTP 异常
         raise HTTPException(status_code=400, detail="请求无法处理，请检查输入")
 
 @app.post("/sortGoods")
@@ -184,29 +202,35 @@ async def sort_goods(
             "sort_by": "price",
             "page": 1,
             "per_page": 8,
-            "ascending": True
+            "ascending": True,
+            "token": "123"
         }
     )
     ):
     try:
-        offset = (request.page - 1) * request.per_page
-        # 验证排序字段是否存在
-        if request.sort_by.value not in goods.c:
-            raise ValueError(f"Invalid sort field: {request.sort_by}")
-        try:
-            query = select(func.count()).select_from(goods)
-            result = await database.fetch_val(query)
-        except Exception as e:
-            print(f"Error: {str(e)}")
-            raise HTTPException(status_code=500, detail="无法获取商品总数")
-        order_by = cast(goods.c[request.sort_by.value], Float).asc() if request.ascending else cast(goods.c[request.sort_by.value], Float).desc()
-        query = goods.select().order_by(order_by).offset(offset).limit(request.per_page)
-        goods_info_list = await database.fetch_all(query)
-        
-        # 将 Record 对象转换为字典
-        goods_info_list = [dict(record) for record in goods_info_list]
-        
-        return {"goods": goods_info_list,"len":result}
+        async with async_session() as session:
+            async with session.begin():
+                user = await verify_user_by_token(session, request.token)
+                
+                if user:
+                    offset = (request.page - 1) * request.per_page
+                    # 验证排序字段是否存在
+                    if request.sort_by.value not in goods.c:
+                        raise ValueError(f"Invalid sort field: {request.sort_by}")
+                    try:
+                        query = select(func.count()).select_from(goods)
+                        result = await database.fetch_val(query)
+                    except Exception as e:
+                        print(f"Error: {str(e)}")
+                        raise HTTPException(status_code=500, detail="无法获取商品总数")
+                    order_by = cast(goods.c[request.sort_by.value], Float).asc() if request.ascending else cast(goods.c[request.sort_by.value], Float).desc()
+                    query = goods.select().order_by(order_by).offset(offset).limit(request.per_page)
+                    goods_info_list = await database.fetch_all(query)
+                    
+                    # 将 Record 对象转换为字典
+                    goods_info_list = [dict(record) for record in goods_info_list]
+                    
+                    return {"goods": goods_info_list,"len":result}
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
@@ -225,7 +249,6 @@ def encrypt_password(data: str) -> str:
     sha256 = hashlib.sha256()
     sha256.update(data.encode('utf-8'))
     return sha256.hexdigest() 
-
 
 
 @app.post("/getToken")

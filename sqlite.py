@@ -5,6 +5,8 @@ import time
 from sqlalchemy import Table
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import select
 DATABASE_URL = "sqlite:///./test.db"  # 使用 SQLite 数据库；你可以替换为其他数据库
 database = Database(DATABASE_URL)
 metadata = MetaData()
@@ -36,3 +38,23 @@ users = Table(
 engine = create_engine(DATABASE_URL)
 # 创建所有表（如果尚未存在）
 metadata.create_all(engine)
+async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+async def verify_user_by_token(session: AsyncSession, token: str):
+    """
+    Verify user by token and return the user object if verification is successful.
+
+    Args:
+    session (AsyncSession): The session to execute database operations.
+    token (str): The token used for user verification.
+
+    Returns:
+    User object if found and token matches, otherwise None.
+    """
+    stmt = select(users).where(users.c.token == token)
+    result = await session.execute(stmt)
+    user = result.scalar()
+    
+    if user and user.token == token:
+        return user
+    return None
