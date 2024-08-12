@@ -1,16 +1,18 @@
 from fastapi import FastAPI, HTTPException, Query,Body, Request,status
+from fastapi.responses import FileResponse
 import json
 import urllib3
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.sql import select
-from contextlib import asynccontextmanager
 from sqlalchemy import cast, Float
 from pydantic import ValidationError
+import os
 from requests_body import *
 from sqlite import *
 from spider import *
 import hashlib
+from tqdm import tqdm
 # 忽略 HTTPS 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # 创建 FastAPI 应用
@@ -35,6 +37,24 @@ async def insert_goods_info(goods_info_list):
             insert_query = goods.insert().values(goods_info)
             await database.execute(insert_query)
 
+@app.on_event("startup")
+async def startup():
+    async with engine.begin() as conn:
+        # 在这里创建表
+        await conn.run_sync(metadata.create_all)
+    await database.connect()
+
+@app.on_event("shutdown")
+async def shutdown():
+    await database.disconnect()
+
+# @asynccontextmanager
+# async def lifespan(app: FastAPI):
+#     await database.connect()
+#     # 在数据库连接后创建表
+#     await create_tables()
+#     yield
+#     await database.disconnect()
 
 @app.post("/generateUrl/")
 def generate_url(filter_request : FilterRequest = Body(
@@ -73,6 +93,12 @@ def generate_url(filter_request : FilterRequest = Body(
     # 捕获所有类型的异常，并返回状态码为 400 的 HTTP 异常
         raise HTTPException(status_code=400, detail="请求无法处理，请检查输入")
 # 定义 POST 请求
+
+async def is_image_url_exist(session, image_name):
+    stmt = select(goods).where(goods.c.goods_image_name == image_name)
+    result = await session.execute(stmt)
+    return result.scalar() is not None
+
 @app.post("/getTable")
 async def get_table_endpoint(
     request: URLRequest = Body(
@@ -102,9 +128,12 @@ async def get_table_endpoint(
                                 continue
                             
                             # 提取每个商品的信息，并跳过名称为 None 的商品
-                            for goods_info in table:
+                            for goods_info in tqdm(table):
                                 goods_data = get_goods_info(goods_info)
-                                if goods_data and goods_data['name']:
+                                if goods_data and goods_data['name'] and goods_data['goods_image_url']:
+                                    # 检查数据库中是否已存在相同的图片URL
+                                    if not await is_image_url_exist(session, goods_data['goods_image_name']):
+                                        download_pic_sync(goods_data['goods_image_url'])  # 同步下载图片
                                     goods_info_list.append(goods_data)
                         except Exception as e:
                             # 记录错误但继续处理下一页
@@ -116,6 +145,8 @@ async def get_table_endpoint(
                         return {"goods": goods_info_list}
                     else:
                         raise HTTPException(status_code=404, detail="未找到商品信息")
+                else:
+                    raise HTTPException(status_code=401,detail='token错误')
     except ValidationError as e:
         # 处理请求体验证错误
         error_messages = []
@@ -167,6 +198,8 @@ async def clear_goods(request: ClearRequest = Body(...)):
                 # 如果用户验证通过，执行删除操作
                 await session.execute(goods.delete())
                 return {"status": "All goods cleared"}
+            if not user:
+                raise HTTPException(status_code=401,detail='token错误')
             else:
                 raise HTTPException(status_code=404, detail="User not found or token mismatch")
 
@@ -179,16 +212,26 @@ async def delete_goods(request: DeleteData = Body(..., example={"token": "123", 
                 user = await verify_user_by_token(session, request.token)
                 
                 if user:
-                    # 构建通过 id 列表删除条目的 SQL 查询
-                    query = goods.delete().where(goods.c.id.in_(request.id_list))
-                    result = await session.execute(query)  # 执行 SQL 查询
-                    await session.commit()  # 确保提交事务以应用更改
-                    if result:
-                        return {"status": f"Goods with IDs {request.id_list} deleted"}
+                    # 检查每个ID是否存在，然后尝试删除
+                    deleted_ids = []
+                    not_found_ids = []
+                    for item_id in request.id_list:
+                        query = goods.delete().where(goods.c.id == item_id)
+                        result = await session.execute(query)
+                        if result.rowcount > 0:
+                            deleted_ids.append(item_id)
+                        else:
+                            not_found_ids.append(item_id)
+                    await session.commit()
+                    
+                    if not_found_ids:
+                        raise HTTPException(status_code=404, detail=f"Goods with IDs {not_found_ids} not found")
+                    return {"status": f"Goods with IDs {deleted_ids} successfully deleted"}
+                if not user:
+                    raise HTTPException(status_code=401,detail='token错误')
                 else:
                     raise HTTPException(status_code=404, detail="User not found or token mismatch")
     except Exception as e:
-        # 捕获所有类型的异常，并返回状态码为 400 的 HTTP 异常
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/sortGoods")
@@ -204,36 +247,33 @@ async def sort_goods(
         }
     )
     ):
-    try:
-        async with async_session() as session:
-            async with session.begin():
-                user = await verify_user_by_token(session, request.token)
+    async with async_session() as session:
+        async with session.begin():
+            user = await verify_user_by_token(session, request.token)
+            if user == False:
+                raise HTTPException(status_code=401,detail='token错误')
+            if user:
+                offset = (request.page - 1) * request.per_page
+                # 验证排序字段是否存在
+                if request.sort_by.value not in goods.c:
+                    raise ValueError(f"Invalid sort field: {request.sort_by}")
+                try:
+                    query = select(func.count()).select_from(goods)
+                    result = await database.fetch_val(query)
+                except Exception as e:
+                    print(f"Error: {str(e)}")
+                    raise HTTPException(status_code=500, detail="无法获取商品总数")
+                order_by = cast(goods.c[request.sort_by.value], Float).asc() if request.ascending else cast(goods.c[request.sort_by.value], Float).desc()
+                query = goods.select().order_by(order_by).offset(offset).limit(request.per_page)
+                goods_info_list = await database.fetch_all(query)
+                # 将 Record 对象转换为字典
+                goods_info_list = [dict(record) for record in goods_info_list]
                 
-                if user:
-                    offset = (request.page - 1) * request.per_page
-                    # 验证排序字段是否存在
-                    if request.sort_by.value not in goods.c:
-                        raise ValueError(f"Invalid sort field: {request.sort_by}")
-                    try:
-                        query = select(func.count()).select_from(goods)
-                        result = await database.fetch_val(query)
-                    except Exception as e:
-                        print(f"Error: {str(e)}")
-                        raise HTTPException(status_code=500, detail="无法获取商品总数")
-                    order_by = cast(goods.c[request.sort_by.value], Float).asc() if request.ascending else cast(goods.c[request.sort_by.value], Float).desc()
-                    query = goods.select().order_by(order_by).offset(offset).limit(request.per_page)
-                    goods_info_list = await database.fetch_all(query)
-                    
-                    # 将 Record 对象转换为字典
-                    goods_info_list = [dict(record) for record in goods_info_list]
-                    
-                    return {"goods": goods_info_list,"len":result}
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
-    except Exception as e:
-        # 捕获所有其他类型的异常，并返回状态码为 400 的 HTTP 异常
-        print(f"Unexpected error: {str(e)}")  # 记录错误以便调试
-        raise HTTPException(status_code=400, detail="请求无法处理，请检查输入")
+                return {"goods": goods_info_list,"len":result}
+    # except Exception as e:
+    #     # 捕获所有其他类型的异常，并返回状态码为 400 的 HTTP 异常
+    #     print(f"Unexpected error: {str(e)}")  # 记录错误以便调试
+    #     raise HTTPException(status_code=400, detail="请求无法处理，请检查输入")
 
 # def encrypt_password(username: str, password: str) -> str:
 #     current_time = str(int(time.time()))
@@ -241,13 +281,34 @@ async def sort_goods(
 #     sha256 = hashlib.sha256()
 #     sha256.update(data.encode('utf-8'))
 #     return sha256.hexdigest()
+def load_image(file_name):
+    try:
+        with open(f'./file/{file_name}','rb') as f:
+            return f.read()
+    except:
+        Exception
 
-def encrypt_password(data: str) -> str:
-    sha256 = hashlib.sha256()
-    sha256.update(data.encode('utf-8'))
-    return sha256.hexdigest() 
+@app.get("/getGoodsPicture/{file_name}")
+async def get_picture(file_name: str):
+    goods_image = file_name
+    image_path = f"./file/{goods_image}"
+    if not os.path.exists(image_path):
+        raise HTTPException(status_code=404, detail="Image file not found on server")
 
+    media_type = determine_media_type(goods_image)  # 确保你有逻辑来确定文件的MIME类型
+    return FileResponse(image_path, media_type=media_type)
 
+def determine_media_type(filename: str) -> str:
+    """根据文件扩展名确定媒体类型"""
+    EXTENSION_TO_MEDIA_TYPE = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".png": "image/png"
+    }
+    ext = os.path.splitext(filename)[1].lower()
+    return EXTENSION_TO_MEDIA_TYPE.get(ext, "application/octet-stream")
+                
 @app.post("/getToken")
 async def get_token(request: GetToken = Body(...)):
     async with async_session() as session:
@@ -258,13 +319,8 @@ async def get_token(request: GetToken = Body(...)):
             user = result.fetchone()
             
             if user:
-                if user.password == encrypt_password(request.password):
-                    token = encrypt_password(request.password + user.username)  # 加强 token
-                    # 异步将 token 存储到数据库中
-                    await session.execute(
-                        users.update().where(users.c.username == request.username).values(token=token)
-                    )
-                    # session.commit() 在 async with session.begin() 中自动处理
+                if user.password == encrypt_password(request.password+'123'+request.username):
+                    token = user.token
                     return {"token": token}
                 else:
                     raise HTTPException(status_code=400, detail="Incorrect password")
@@ -289,7 +345,7 @@ async def register_user(request: RegisterRequest = Body(...)):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username already exists")
             
             # 加密密码
-            encrypted_password = encrypt_password(request.password)
+            encrypted_password = encrypt_password(request.password+'123'+request.username)
             
             # 异步创建新用户
             new_user = users.insert().values(
@@ -301,13 +357,6 @@ async def register_user(request: RegisterRequest = Body(...)):
             # session.commit() 在 async with session.begin() 中自动处理
 
             return {"status": "User registered successfully"}
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await database.connect()
-    yield
-    await database.disconnect()
-
-app.router.lifespan_context = lifespan
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

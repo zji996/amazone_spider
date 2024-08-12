@@ -3,7 +3,13 @@ from bs4 import BeautifulSoup
 import requests
 import re
 from fake_useragent import UserAgent
+import urllib3
+import aiohttp
+import asyncio
+import aiofiles
+import os
 ua = UserAgent()
+user_agent = ua.random
 # 定义 AmazonFilter 类
 class AmazonFilter():
     def __init__(self, name: str, country: str, type: str, page_start: int, min_stars: int, max_stars: int, min_likes: int, max_likes: int, key: str):
@@ -37,22 +43,21 @@ class AmazonFilter():
 # 获取 HTML 内容
 def get_html_content(url, page=1):
     headers = {
-        'User-Agent': ua.random,
+        'User-Agent': user_agent,
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept-Encoding': 'gzip, deflate, br',
         'Connection': 'keep-alive'
     }
-    
-    # 添加页码参数到 URL
     if '?' in url:
         url += f'&page={page}'
     else:
         url += f'?page={page}'
     
-    main_page = requests.get(url=url, headers=headers, verify=False)
-    if main_page.status_code != 200:
-        HTTPException(status_code=main_page.status_code, detail="Failed to fetch the URL")
-    return main_page.text
+    response = requests.get(url=url, headers=headers, verify=False)
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Failed to fetch the URL")
+    
+    return response.text
 
 # 提取包含 data-asin 的 <div> 元素
 def get_table(html: str):
@@ -60,6 +65,19 @@ def get_table(html: str):
     goods_info_list = soup.find_all('div', attrs={'data-asin': True})
     return goods_info_list
 
+# def get_pic_name_from_url(pic_url):
+#     name = ''
+#     for letter in pic_url[::-1]:
+#         if letter == '/':
+#             break
+#         name += letter
+#     return name[::-1]
+
+def get_pic_name_from_url(pic_url):
+    return os.path.basename(pic_url)
+
+def l18n(goods_image_name):
+    return f'http://192.168.50.28:8000/getGoodsPicture/{goods_image_name}'
 # 提取商品信息
 def get_goods_info(goods_info):
     pattern = re.compile(r'^\d{1,3}(,\d{3})* ratings')
@@ -108,10 +126,11 @@ def get_goods_info(goods_info):
     
     try:
         goods_image = goods_info.find('img', class_='s-image')
-        goods_image = goods_image['src'] if goods_image else None
+        goods_image_url = goods_image['src'] if goods_image else None
+        goods_image_name = get_pic_name_from_url(goods_image_url)
     except AttributeError:
-        goods_image = None
-    
+        goods_image_url = None
+        goods_image_name = None
     return {
         'name': goods_name,
         'price': goods_price,
@@ -120,5 +139,39 @@ def get_goods_info(goods_info):
         'comment': goods_comment,
         'is_prime': goods_is_prime,
         'goods_stars': goods_stars,
-        'goods_image': goods_image
+        'goods_image_url': goods_image_url,
+        'goods_image_name':goods_image_name,
+        'local_image_url':l18n(goods_image_name)
     }
+async def save_picture(session, pic_url, folder='file'):
+    os.makedirs(folder, exist_ok=True)
+    async with session.get(pic_url) as response:
+        if response.status == 200:
+            content = await response.read()
+            file_path = os.path.join(folder, os.path.basename(pic_url))
+            with open(file_path, 'wb') as f:
+                f.write(content)
+            return f"Downloaded {pic_url}"
+        else:
+            return f"Failed to download {pic_url}: {response.status}"
+
+def save_picture_sync(pic_url, headers, folder='file'):
+    os.makedirs(folder, exist_ok=True)
+    try:
+        response = requests.get(pic_url, headers=headers)
+        if response.status_code == 200:
+            file_path = os.path.join(folder, os.path.basename(pic_url))
+            with open(file_path, 'wb') as f:
+                f.write(response.content)
+            return f"Downloaded {pic_url}"
+        else:
+            return f"Failed to download {pic_url}: {response.status_code}"
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error downloading image: {str(e)}")
+
+def download_pic_sync(pic_url, user_agent=user_agent):
+    headers = {'User-Agent': user_agent}
+    return save_picture_sync(pic_url, headers)
+
+if __name__ == '__main__':
+    pass

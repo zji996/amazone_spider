@@ -57,3 +57,6 @@ class RegisterRequest(BaseModel):
 
 class ClearRequest(BaseModel):
     token: Optional[str] = Field(None, description="The token to use for authentication")
+
+class GetGoodsPicture(BaseModel):
+    id: int = Field(None,description="The main key of goods")
