@@ -172,27 +172,24 @@ async def clear_goods(request: ClearRequest = Body(...)):
 
 
 @app.post("/deleteGoods/")
-async def delete_goods(request: deleteData = Body(
-        ...,
-        example={
-            "id": 1,
-            "token": "123"
-        }
-    )):
+async def delete_goods(request: DeleteData = Body(..., example={"token": "123", "id_list": [1, 2, 3]})):
     try:
         async with async_session() as session:
             async with session.begin():
                 user = await verify_user_by_token(session, request.token)
                 
                 if user:
-                    query = goods.delete().where(goods.c.id == request.id)  # 构建通过 id 删除条目的 SQL 查询
-                    result = await database.execute(query)  # 执行 SQL 查询
+                    # 构建通过 id 列表删除条目的 SQL 查询
+                    query = goods.delete().where(goods.c.id.in_(request.id_list))
+                    result = await session.execute(query)  # 执行 SQL 查询
+                    await session.commit()  # 确保提交事务以应用更改
                     if result:
-                        return {"status": f"Goods with id {request.id} deleted"}
-                    # HTTPException(status_code=404, detail=f"Goods with id {item_id} not found")
+                        return {"status": f"Goods with IDs {request.id_list} deleted"}
+                else:
+                    raise HTTPException(status_code=404, detail="User not found or token mismatch")
     except Exception as e:
-                # 捕获所有类型的异常，并返回状态码为 400 的 HTTP 异常
-        raise HTTPException(status_code=400, detail="请求无法处理，请检查输入")
+        # 捕获所有类型的异常，并返回状态码为 400 的 HTTP 异常
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/sortGoods")
 async def sort_goods(
@@ -252,48 +249,58 @@ def encrypt_password(data: str) -> str:
 
 
 @app.post("/getToken")
-def get_token(request: getToken = Body(...)):
-    with engine.connect() as connection:
-        # 从数据库查询用户
-        stmt = select(users).where(users.c.username == request.username)
-        result = connection.execute(stmt)
-        user = result.fetchone()
-        if user:
-            if user.password == encrypt_password(request.password):
-                token = encrypt_password(request.password)
-                # 将 token 存储到数据库中
-                connection.execute(
-                    users.update().where(users.c.username == request.username).values(token=token)
-                )
-                connection.commit()  # 确保提交事务
-                return {"token": token}
+async def get_token(request: GetToken = Body(...)):
+    async with async_session() as session:
+        async with session.begin():
+            # 从数据库异步查询用户
+            stmt = select(users).where(users.c.username == request.username)
+            result = await session.execute(stmt)
+            user = result.fetchone()
+            
+            if user:
+                if user.password == encrypt_password(request.password):
+                    token = encrypt_password(request.password + user.username)  # 加强 token
+                    # 异步将 token 存储到数据库中
+                    await session.execute(
+                        users.update().where(users.c.username == request.username).values(token=token)
+                    )
+                    # session.commit() 在 async with session.begin() 中自动处理
+                    return {"token": token}
+                else:
+                    raise HTTPException(status_code=400, detail="Incorrect password")
             else:
-                raise HTTPException(status_code=400, detail="Incorrect password")
-        else:
-            raise HTTPException(status_code=400, detail="Username not found")
+                raise HTTPException(status_code=404, detail="Username not found")
+
+def encrypt_password(password: str) -> str:
+    # 创建一个新的 sha256 hash 对象
+    sha_signature = hashlib.sha256(password.encode()).hexdigest()
+    return sha_signature
 
 @app.post("/register")
-def register_user(request: RegisterRequest = Body(...)):
-    with engine.connect() as connection:
-        # 检查用户名是否已存在
-        stmt = select(users).where(users.c.username == request.username)
-        result = connection.execute(stmt)
-        user = result.fetchone()
-        
-        if user:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username already exists")
-        
-        # 加密密码
-        encrypted_password = encrypt_password(request.password)
-        
-        # 创建新用户
-        new_user = users.insert().values(
-            username=request.username,
-            password=encrypted_password,
-            token=encrypted_password  # 示例 token，实际应用中需要生成
-        )
-        connection.execute(new_user)
-        connection.commit()  # 确保提交事务
+async def register_user(request: RegisterRequest = Body(...)):
+    async with async_session() as session:
+        async with session.begin():
+            # 异步检查用户名是否已存在
+            stmt = select(users).where(users.c.username == request.username)
+            result = await session.execute(stmt)
+            user = result.scalar()
+            
+            if user:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username already exists")
+            
+            # 加密密码
+            encrypted_password = encrypt_password(request.password)
+            
+            # 异步创建新用户
+            new_user = users.insert().values(
+                username=request.username,
+                password=encrypted_password,
+                token=encrypted_password  # 示例 token，实际应用中需要生成
+            )
+            await session.execute(new_user)
+            # session.commit() 在 async with session.begin() 中自动处理
+
+            return {"status": "User registered successfully"}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.connect()
