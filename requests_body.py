@@ -7,14 +7,12 @@ from enum import Enum
 
 # 定义请求体模型
 
-class URLRequest(BaseModel):
-    url: HttpUrl = Field(..., description="The URL to request")
+class CreateTask(BaseModel):
+    url: Optional[str] = Field(..., description="The URL to request")
     start_page: Optional[int] = Field(1, ge=1, description="The starting page number")
     end_page: Optional[int] = Field(1, ge=1, description="The ending page number")
-    token: Optional[str] = Field('123', description="The token to use for authentication")
 
 class DeleteData(BaseModel):
-    token: Optional[str] = Field(None, description="The token to use for authentication")
     id_list: Optional[list[int]] = Field(None, description="The main SQL key list")
 
 class FilterRequest(BaseModel):
@@ -27,7 +25,6 @@ class FilterRequest(BaseModel):
     min_likes: Optional[int] = Field(default=0, ge=0,description="Minimum likes")
     max_likes: Optional[int] = Field(default=1000, ge=1,description="Maximum likes")
     key: Optional[str] = Field(default='', max_length=20,description="Search key")
-    token: Optional[str] = Field(None, description="The token to use for authentication")
 
 class GetToken(BaseModel):
     username: Optional[str] = Field(default='', max_length=20,description="username")
@@ -45,7 +42,6 @@ class SortRequest(BaseModel):
     page: int = Field(1, ge=1,description="The page number to return")
     per_page: int = Field(10, ge=1,description="The number of items to return per page")
     ascending: bool = Field(default=True,description="Whether to sort in ascending order")
-    token: Optional[str] = Field(None, description="The token to use for authentication")
 
 class RegisterRequest(BaseModel):
     username: str = Field(..., max_length=20,description="username")
@@ -53,10 +49,3 @@ class RegisterRequest(BaseModel):
     secret: Optional[str] = Field(None, max_length=20,description="secret")
     timestamp: Optional[int] = Field(None, max_length=20,description="timestamp")
     lifespan: Optional[int] = Field(None, ge=0,description="lifespan")
-    token: Optional[str] = Field(None, description="The token to use for authentication")
-
-class ClearRequest(BaseModel):
-    token: Optional[str] = Field(None, description="The token to use for authentication")
-
-class GetGoodsPicture(BaseModel):
-    id: int = Field(None,description="The main key of goods")

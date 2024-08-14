@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query,Body, Request,status
+from fastapi import FastAPI, HTTPException, Query,Body, Request,status,Header
 from fastapi.responses import FileResponse
 import json
 import urllib3
@@ -99,69 +99,121 @@ async def is_image_url_exist(session, image_name):
     result = await session.execute(stmt)
     return result.scalar() is not None
 
-@app.post("/getTable")
-async def get_table_endpoint(
-    request: URLRequest = Body(
-        ...,
-        example={
-            "url": "https://www.amazon.com/s?k=laptop&crid=E4IFH65CN7W3&sprefix=laptop%2Caps%2C316&ref=nb_sb_noss_1",
-            "start_page": 1,
-            "end_page": 5,
-            "token": "123"
-        }
-    )
-):
-    try:
-        async with async_session() as session:
-            async with session.begin():
-                user = await verify_user_by_token(session, request.token)
+async def process_goods_info(session, url, start_page, end_page):
+    goods_info_list = []
+    for page in range(start_page, end_page + 1):
+        try:
+            html = get_html_content(url, page)
+            table = get_table(html)
+            if not table:
+                continue
             
-                if user:
-                    goods_info_list = []
-                    # 将 HttpUrl 对象转换为字符串
-                    url = str(request.url)
-                    for page in range(request.start_page, request.end_page + 1):
-                        try:
-                            html = get_html_content(url, page)
-                            table = get_table(html)
-                            if not table:
-                                continue
-                            
-                            # 提取每个商品的信息，并跳过名称为 None 的商品
-                            for goods_info in tqdm(table):
-                                goods_data = get_goods_info(goods_info)
-                                if goods_data and goods_data['name'] and goods_data['goods_image_url']:
-                                    # 检查数据库中是否已存在相同的图片URL
-                                    if not await is_image_url_exist(session, goods_data['goods_image_name']):
-                                        download_pic_sync(goods_data['goods_image_url'])  # 同步下载图片
-                                    goods_info_list.append(goods_data)
-                        except Exception as e:
-                            # 记录错误但继续处理下一页
-                            print(f"Error processing page {page}: {str(e)}")
-                            continue
-                                
-                    if goods_info_list:
-                        await insert_goods_info(goods_info_list)
-                        return {"goods": goods_info_list}
-                    else:
-                        raise HTTPException(status_code=404, detail="未找到商品信息")
-                else:
-                    raise HTTPException(status_code=401,detail='token错误')
+            for goods_info in tqdm(table):
+                goods_data = get_goods_info(goods_info)
+                if goods_data and goods_data['name'] and goods_data['goods_image_url']:
+                    if not await is_image_url_exist(session, goods_data['goods_image_name']):
+                        download_pic_sync(goods_data['goods_image_url'])
+                    goods_info_list.append(goods_data)
+        except Exception as e:
+            print(f"Error processing page {page}: {str(e)}")
+            continue
+    return goods_info_list
+
+async def create_task_logic(request, token):
+    async with async_session() as session:
+        async with session.begin():
+            user = await verify_user_by_token(session, token)
+            if not user:
+                raise HTTPException(status_code=401, detail='token错误')
+            
+            url = str(request.url)
+            goods_info_list = await process_goods_info(session, url, request.start_page, request.end_page)
+            if goods_info_list:
+                await insert_goods_info(goods_info_list)
+                return {"goods": len(goods_info_list)}
+            else:
+                raise HTTPException(status_code=404, detail="未找到商品信息")
+
+@app.post("/createTask/")
+async def createTask(token:str = Header(),request: CreateTask = Body(..., example={
+    "url": "https://www.amazon.com/s?k=laptop&crid=E4IFH65CN7W3&sprefix=laptop%2Caps%2C316&ref=nb_sb_noss_1",
+    "start_page": 1,
+    "end_page": 1,
+})):
+    try:
+        return await create_task_logic(request, token)
     except ValidationError as e:
-        # 处理请求体验证错误
-        error_messages = []
-        for error in e.errors():
-            error_messages.append(f"Field: {error['loc'][0]}, Error: {error['msg']}")
+        error_messages = [f"Field: {error['loc'][0]}, Error: {error['msg']}" for error in e.errors()]
         raise HTTPException(status_code=422, detail=error_messages)
-
     except HTTPException as he:
-        # 重新抛出 HTTP 异常
         raise he
-
     except Exception as e:
-        # 捕获所有其他类型的异常，并返回状态码为 500 的 HTTP 异常
-        print(f"Unexpected error: {str(e)}")  # 记录错误以便调试
+        print(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail="服务器内部错误")
+
+# @app.post("/createTask/")
+# async def createTask(
+#     request: CreateTask = Body(
+#         ...,
+#         example={
+#             "url": "https://www.amazon.com/s?k=laptop&crid=E4IFH65CN7W3&sprefix=laptop%2Caps%2C316&ref=nb_sb_noss_1",
+#             "start_page": 1,
+#             "end_page": 1,
+#             "token": "b1c58ea457ba1518573b12799596b1a6d26c8fddd7d74b858dc1fe7a15119453"
+#         }
+#     )
+# ):
+#     try:
+#         async with async_session() as session:
+#             async with session.begin():
+#                 user = await verify_user_by_token(session, request.token)
+            
+#                 if user:
+#                     goods_info_list = []
+#                     # 将 HttpUrl 对象转换为字符串
+#                     url = str(request.url)
+#                     for page in range(request.start_page, request.end_page + 1):
+#                         try:
+#                             html = get_html_content(url, page)
+#                             table = get_table(html)
+#                             if not table:
+#                                 continue
+                            
+#                             # 提取每个商品的信息，并跳过名称为 None 的商品
+#                             for goods_info in tqdm(table):
+#                                 goods_data = get_goods_info(goods_info)
+#                                 if goods_data and goods_data['name'] and goods_data['goods_image_url']:
+#                                     # 检查数据库中是否已存在相同的图片URL
+#                                     if not await is_image_url_exist(session, goods_data['goods_image_name']):
+#                                         download_pic_sync(goods_data['goods_image_url'])  # 同步下载图片
+#                                     goods_info_list.append(goods_data)
+#                         except Exception as e:
+#                             # 记录错误但继续处理下一页
+#                             print(f"Error processing page {page}: {str(e)}")
+#                             continue
+                                
+#                     if goods_info_list:
+#                         await insert_goods_info(goods_info_list)
+#                         return {"goods": len(goods_info_list)}
+#                     else:
+#                         raise HTTPException(status_code=404, detail="未找到商品信息")
+#                 else:
+#                     raise HTTPException(status_code=401,detail='token错误')
+#     except ValidationError as e:
+#         # 处理请求体验证错误
+#         error_messages = []
+#         for error in e.errors():
+#             error_messages.append(f"Field: {error['loc'][0]}, Error: {error['msg']}")
+#         raise HTTPException(status_code=422, detail=error_messages)
+
+#     except HTTPException as he:
+#         # 重新抛出 HTTP 异常
+#         raise he
+
+#     except Exception as e:
+#         # 捕获所有其他类型的异常，并返回状态码为 500 的 HTTP 异常
+#         print(f"Unexpected error: {str(e)}")  # 记录错误以便调试
+#         raise HTTPException(status_code=500, detail="服务器内部错误")
 
 # @app.get("/getGoods")
 # async def get_goods():
@@ -189,10 +241,10 @@ async def log_request(request: Request, call_next):
     return response
 
 @app.post("/clearGoods")
-async def clear_goods(request: ClearRequest = Body(...)):
+async def clear_goods(token: str = Header()):
     async with async_session() as session:
         async with session.begin():
-            user = await verify_user_by_token(session, request.token)
+            user = await verify_user_by_token(session, token)
             
             if user:
                 # 如果用户验证通过，执行删除操作
@@ -205,11 +257,11 @@ async def clear_goods(request: ClearRequest = Body(...)):
 
 
 @app.post("/deleteGoods/")
-async def delete_goods(request: DeleteData = Body(..., example={"token": "123", "id_list": [1, 2, 3]})):
+async def delete_goods(token : str = Header(...),request: DeleteData = Body(..., example={"id_list": [1, 2, 3]})):
     try:
         async with async_session() as session:
             async with session.begin():
-                user = await verify_user_by_token(session, request.token)
+                user = await verify_user_by_token(session, token)
                 
                 if user:
                     # 检查每个ID是否存在，然后尝试删除
@@ -236,6 +288,7 @@ async def delete_goods(request: DeleteData = Body(..., example={"token": "123", 
 
 @app.post("/sortGoods")
 async def sort_goods(
+    token: str = Header(...),
     request: SortRequest = Body(
         ...,
         example={
@@ -243,13 +296,12 @@ async def sort_goods(
             "page": 1,
             "per_page": 8,
             "ascending": True,
-            "token": "123"
         }
     )
     ):
     async with async_session() as session:
         async with session.begin():
-            user = await verify_user_by_token(session, request.token)
+            user = await verify_user_by_token(session, token)
             if user == False:
                 raise HTTPException(status_code=401,detail='token错误')
             if user:

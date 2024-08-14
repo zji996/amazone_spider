@@ -7,7 +7,7 @@ from sqlalchemy.sql import select
 import time
 from sqlalchemy import Table
 
-DATABASE_URL = "sqlite+aiosqlite:///./test16.db"
+DATABASE_URL = "sqlite+aiosqlite:///./public.db"
 database = Database(DATABASE_URL)
 metadata = MetaData()
 
