@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel,field_validator
 from typing import Optional 
 from sqlalchemy import func
 from pydantic import BaseModel, Field, HttpUrl
@@ -15,9 +15,10 @@ class CreateTask(BaseModel):
 class DeleteData(BaseModel):
     id_list: Optional[list[int]] = Field(None, description="The main SQL key list")
 
+
 class FilterRequest(BaseModel):
     name: Optional[str] = Field(default='', max_length=20,description="Filter name")
-    country: Optional[str] = Field(default='com', max_length=20,description="Country code")
+    country: Optional[str] = Field(default='com',description="Country code")
     type: Optional[str] = Field(default="serach", max_length=20,description="Filter type")
     page_start: Optional[int] = Field(default=1, ge=1,description="Starting page number")
     min_stars: Optional[int] = Field(default=0, ge=0,description="Minimum stars")
@@ -25,6 +26,37 @@ class FilterRequest(BaseModel):
     min_likes: Optional[int] = Field(default=0, ge=0,description="Minimum likes")
     max_likes: Optional[int] = Field(default=1000, ge=1,description="Maximum likes")
     key: Optional[str] = Field(default='', max_length=20,description="Search key")
+    @field_validator('country')
+    def validate_country(cls, v):
+        allowed_countries = [
+            'com',      # 美国
+            'co.uk',    # 英国
+            'de',       # 德国
+            'fr',       # 法国
+            'it',       # 意大利
+            'es',       # 西班牙
+            'ca',       # 加拿大
+            'jp',       # 日本
+            'in',       # 印度
+            'com.mx',   # 墨西哥
+            'com.br',   # 巴西
+            'com.au',   # 澳大利亚
+            'nl',       # 荷兰
+            'sg',       # 新加坡
+            'ae',       # 阿拉伯联合酋长国
+            'sa',       # 沙特阿拉伯
+            'se',       # 瑞典
+            'pl',       # 波兰
+            'com.tr',   # 土耳其
+            'cn',       # 中国（注意：亚马逊中国已停止运营，但保留域名）
+            'co.jp',    # 日本（替代域名）
+            'com.mx',   # 墨西哥
+            'com.sg',   # 新加坡（替代域名）
+            'com.ae',   # 阿联酋（替代域名）
+        ]
+        if v not in allowed_countries:
+            raise ValueError
+        return v
 
 class GetToken(BaseModel):
     username: Optional[str] = Field(default='', max_length=20,description="username")

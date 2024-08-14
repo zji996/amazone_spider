@@ -8,8 +8,8 @@ import dotenv
 import json
 dotenv.load_dotenv()
 api_address = os.getenv('api_address')
-print (os.getenv('proxies'))
-proxies = json.loads(os.getenv('proxies'))
+with open('proxies.json', 'r') as f:
+    proxies = json.load(f) 
 ua = UserAgent()
 # 定义 AmazonFilter 类
 class AmazonFilter():
@@ -54,7 +54,7 @@ def get_html_content(url, page=1):
     else:
         url += f'?page={page}'
     
-    response = requests.get(url=url, headers=headers, verify=False)
+    response = requests.get(url=url, headers=headers)
     if response.status_code != 200:
         raise HTTPException(status_code=response.status_code, detail="Failed to fetch the URL")
     
@@ -175,7 +175,4 @@ def download_pic_sync(pic_url, user_agent=ua.random):
     return save_picture_sync(pic_url, headers)
 
 if __name__ == '__main__':
-    print(requests.get(url='https://www.amazon.com/s?k=iphone', 
-                       proxies=proxies,
-                       headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.33 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36 Edg/127.0.0.0'}).status_code)
-    # get_html_content('https://www.amazon.com/s?k=iphone', 1)
+    AmazonFilter('test', 'com', 'search', 1, 0, 30000, 0, 1000, 'test').find_key()

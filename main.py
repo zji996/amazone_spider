@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Query,Body, Request,status,Header
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import json
 import urllib3
 import uvicorn
@@ -48,6 +48,19 @@ async def startup():
 async def shutdown():
     await database.disconnect()
 
+@app.exception_handler(ValidationError)
+def validation_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=400,
+        content={"message": "Invalid input, please check your data."},
+    )
+
+@app.exception_handler(ValueError)
+def value_error_handler(request, exc):
+    return JSONResponse(
+        status_code=400,
+        content={"message": "Invalid country code."},
+    )
 # @asynccontextmanager
 # async def lifespan(app: FastAPI):
 #     await database.connect()
@@ -83,6 +96,7 @@ def generate_url(filter_request : FilterRequest = Body(
             max_likes=filter_request.max_likes,
             key = filter_request.key
         )
+        print(filter_request.country)
         search_url = amazon_filter.find_key()
         return {"url": search_url}
     # except TypeError as e:
@@ -150,76 +164,6 @@ async def createTask(token:str = Header(),request: CreateTask = Body(..., exampl
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail="服务器内部错误")
-
-# @app.post("/createTask/")
-# async def createTask(
-#     request: CreateTask = Body(
-#         ...,
-#         example={
-#             "url": "https://www.amazon.com/s?k=laptop&crid=E4IFH65CN7W3&sprefix=laptop%2Caps%2C316&ref=nb_sb_noss_1",
-#             "start_page": 1,
-#             "end_page": 1,
-#             "token": "b1c58ea457ba1518573b12799596b1a6d26c8fddd7d74b858dc1fe7a15119453"
-#         }
-#     )
-# ):
-#     try:
-#         async with async_session() as session:
-#             async with session.begin():
-#                 user = await verify_user_by_token(session, request.token)
-            
-#                 if user:
-#                     goods_info_list = []
-#                     # 将 HttpUrl 对象转换为字符串
-#                     url = str(request.url)
-#                     for page in range(request.start_page, request.end_page + 1):
-#                         try:
-#                             html = get_html_content(url, page)
-#                             table = get_table(html)
-#                             if not table:
-#                                 continue
-                            
-#                             # 提取每个商品的信息，并跳过名称为 None 的商品
-#                             for goods_info in tqdm(table):
-#                                 goods_data = get_goods_info(goods_info)
-#                                 if goods_data and goods_data['name'] and goods_data['goods_image_url']:
-#                                     # 检查数据库中是否已存在相同的图片URL
-#                                     if not await is_image_url_exist(session, goods_data['goods_image_name']):
-#                                         download_pic_sync(goods_data['goods_image_url'])  # 同步下载图片
-#                                     goods_info_list.append(goods_data)
-#                         except Exception as e:
-#                             # 记录错误但继续处理下一页
-#                             print(f"Error processing page {page}: {str(e)}")
-#                             continue
-                                
-#                     if goods_info_list:
-#                         await insert_goods_info(goods_info_list)
-#                         return {"goods": len(goods_info_list)}
-#                     else:
-#                         raise HTTPException(status_code=404, detail="未找到商品信息")
-#                 else:
-#                     raise HTTPException(status_code=401,detail='token错误')
-#     except ValidationError as e:
-#         # 处理请求体验证错误
-#         error_messages = []
-#         for error in e.errors():
-#             error_messages.append(f"Field: {error['loc'][0]}, Error: {error['msg']}")
-#         raise HTTPException(status_code=422, detail=error_messages)
-
-#     except HTTPException as he:
-#         # 重新抛出 HTTP 异常
-#         raise he
-
-#     except Exception as e:
-#         # 捕获所有其他类型的异常，并返回状态码为 500 的 HTTP 异常
-#         print(f"Unexpected error: {str(e)}")  # 记录错误以便调试
-#         raise HTTPException(status_code=500, detail="服务器内部错误")
-
-# @app.get("/getGoods")
-# async def get_goods():
-#     query = goods.select()
-#     goods_info_list = await database.fetch_all(query)
-#     return {"goods": goods_info_list}
 
 @app.middleware("http")
 async def log_request(request: Request, call_next):
