@@ -13,6 +13,8 @@ from sqlite import *
 from spider import *
 import hashlib
 from tqdm import tqdm
+import aiohttp
+from pic_downloader import *
 # 忽略 HTTPS 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # 创建 FastAPI 应用
@@ -113,7 +115,7 @@ async def is_image_url_exist(session, image_name):
     result = await session.execute(stmt)
     return result.scalar() is not None
 
-async def process_goods_info(session, url, start_page, end_page):
+async def process_goods_info(url, start_page, end_page):
     goods_info_list = []
     for page in range(start_page, end_page + 1):
         try:
@@ -122,11 +124,9 @@ async def process_goods_info(session, url, start_page, end_page):
             if not table:
                 continue
             
-            for goods_info in tqdm(table):
+            for goods_info in table:
                 goods_data = get_goods_info(goods_info)
                 if goods_data and goods_data['name'] and goods_data['goods_image_url']:
-                    if not await is_image_url_exist(session, goods_data['goods_image_name']):
-                        download_pic_sync(goods_data['goods_image_url'])
                     goods_info_list.append(goods_data)
         except Exception as e:
             print(f"Error processing page {page}: {str(e)}")
@@ -141,13 +141,43 @@ async def create_task_logic(request, token):
                 raise HTTPException(status_code=401, detail='token错误')
             
             url = str(request.url)
-            goods_info_list = await process_goods_info(session, url, request.start_page, request.end_page)
+            goods_info_list= await process_goods_info(url, request.start_page, request.end_page)
             if goods_info_list:
                 await insert_goods_info(goods_info_list)
+                await download_pic_async(goods_info_list,proxy=proxies["http"])
+                await commit_local_image_url_by_sql()
                 return {"goods": len(goods_info_list)}
             else:
                 raise HTTPException(status_code=404, detail="未找到商品信息")
-
+# async def download_pic_async(goods_info_list,proxy,folder='file'):
+#     os.makedirs(folder, exist_ok=True)
+#     for goods_info in goods_info_list:
+#         try:
+#             async with aiohttp.ClientSession() as session:
+#                 async with session.get(goods_info['goods_image_url'],proxy=proxy) as response:
+#                     if response.status == 200:
+#                         content = await response.read()
+#                         file_path = os.path.join(folder, goods_info['goods_image_name'])
+#                         with open(file_path, 'wb') as f:
+#                             f.write(content)
+#         except Exception as e:
+#             print(f"Error downloading image: {str(e)}")
+#             goods_info['local_image_url'] = None
+#         return goods_info_list
+async def commit_local_image_url_by_sql():
+    async with async_session() as session:
+        async with session.begin():
+            query = select(goods).where(goods.c.local_image_url == None)
+            goods_info_list = await database.fetch_all(query)
+            if goods_info_list:
+                for goods_info in goods_info_list:
+                    goods_image_name = goods_info['goods_image_name']
+                    query = goods.update().where(goods.c.id == goods_info['id']).values(local_image_url=l18n(goods_image_name))
+                    await session.execute(query)
+                await session.commit()
+                return {"status": "Local image URL updated"}
+            else:
+                return {"status": "No image URL to update"}
 @app.post("/createTask/")
 async def createTask(token:str = Header(),request: CreateTask = Body(..., example={
     "url": "https://www.amazon.com/s?k=laptop&crid=E4IFH65CN7W3&sprefix=laptop%2Caps%2C316&ref=nb_sb_noss_1",
