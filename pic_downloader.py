@@ -2,6 +2,8 @@ import asyncio
 import os
 import aiohttp
 from functools import wraps
+from spider import ua
+headers = {'User-Agent': ua.random}
 def async_retry(max_retries=3, delay=1):
     def decorator(func):
         @wraps(func)
@@ -31,7 +33,7 @@ async def download_single_image(session, goods_info, proxy, folder):
 
 async def download_pic_async(goods_info_list, proxy, folder='file'):
     os.makedirs(folder, exist_ok=True)
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(headers=headers) as session:
         tasks = []
         for goods_info in goods_info_list:
             task = asyncio.create_task(download_single_image(session, goods_info, proxy, folder))

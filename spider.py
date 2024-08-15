@@ -178,3 +178,4 @@ def download_pic_sync(pic_url, user_agent=ua.random):
 
 if __name__ == '__main__':
     AmazonFilter('test', 'com', 'search', 1, 0, 30000, 0, 1000, 'test').find_key()
+    print(get_html_content('https://www.amazon.com/s?k=iphone+12&ref=nb_sb_noss_2'))
