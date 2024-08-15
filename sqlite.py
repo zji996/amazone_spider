@@ -24,7 +24,8 @@ goods = Table(
     Column("goods_stars", Float, nullable=True),
     Column("goods_image_url", String, nullable=True),
     Column("goods_image_name", String, nullable=True),
-    Column("local_image_url", String, nullable=True)
+    Column("local_image_url", String, nullable=True),
+    Column("timestamp", Integer, default=lambda: int(time.time()), nullable=False),
 )
 
 users = Table(

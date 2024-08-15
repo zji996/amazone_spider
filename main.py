@@ -12,8 +12,6 @@ from requests_body import *
 from sqlite import *
 from spider import *
 import hashlib
-from tqdm import tqdm
-import aiohttp
 from pic_downloader import *
 # 忽略 HTTPS 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)

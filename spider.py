@@ -6,6 +6,7 @@ from fake_useragent import UserAgent
 import os
 import dotenv
 import json
+import time
 dotenv.load_dotenv()
 api_address = os.getenv('api_address')
 with open('proxies.json', 'r') as f:
@@ -142,7 +143,8 @@ def get_goods_info(goods_info):
         'goods_stars': goods_stars,
         'goods_image_url': goods_image_url,
         'goods_image_name':goods_image_name,
-        'local_image_url':l18n(goods_image_name)
+        'local_image_url':l18n(goods_image_name),
+        'timestamp': int(time.time())
     }
 async def save_picture(session, pic_url, folder='file'):
     os.makedirs(folder, exist_ok=True)
