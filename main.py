@@ -13,6 +13,7 @@ from sqlite import *
 from spider import *
 import hashlib
 from pic_downloader import *
+from contextlib import asynccontextmanager
 # 忽略 HTTPS 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # 创建 FastAPI 应用
@@ -37,16 +38,16 @@ async def insert_goods_info(goods_info_list):
             insert_query = goods.insert().values(goods_info)
             await database.execute(insert_query)
 
-@app.on_event("startup")
-async def startup():
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         # 在这里创建表
         await conn.run_sync(metadata.create_all)
-    await database.connect()
-
-@app.on_event("shutdown")
-async def shutdown():
+    yield
     await database.disconnect()
+
+    
 
 @app.exception_handler(ValidationError)
 def validation_exception_handler(request, exc):
